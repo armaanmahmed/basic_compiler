@@ -2,6 +2,20 @@ from sys import argv
 
 DEFINE_TEXT = "#define "
 SINGLE_LINE_COMMENT_TEXT = "//"
+MULTI_LINE_COMMENT_BEGIN = "/*"
+MULTI_LINE_COMMENT_END = "*/"
+
+
+def _remove_comments(text: str) -> str:
+    lines_without_comments: list[str] = []
+    for line in text.splitlines():
+        comment_idx = line.find(SINGLE_LINE_COMMENT_TEXT)
+        if comment_idx == -1:
+            lines_without_comments.append(line)
+        else:
+            lines_without_comments.append(line[:comment_idx])
+
+    return "\n".join((l for l in lines_without_comments if l.strip()))
 
 
 def _extract_mappings(raw_text_str: str) -> tuple[list[str], dict[str, str]]:
@@ -41,7 +55,7 @@ def _process_macros(raw_text_lines: list[str], macro_map: dict[str, str]):
         # once fully processed, add the line to the list
         processed_lines.append(processed_line)
 
-    return "\n".join(processed_lines)
+    return processed_lines
 
 
 def preprocess(raw_text: str, debug=False):
@@ -53,18 +67,13 @@ def preprocess(raw_text: str, debug=False):
         print(f'lines without defines: {lines_without_defines}')
 
     # pass two: process macros
-    processed_text = _process_macros(lines_without_defines, mappings)
+    substituted_text_lines = _process_macros(lines_without_defines, mappings)
+    processed_text = "\n".join(substituted_text_lines)
 
     # pass three: remove comments
-    lines_without_comments: list[str] = []
-    for line in processed_text.splitlines():
-        comment_idx = line.find(SINGLE_LINE_COMMENT_TEXT)
-        if comment_idx == -1:
-            lines_without_comments.append(line)
-        else:
-            lines_without_comments.append(line[:comment_idx])
+    full_text = _remove_comments(processed_text)
 
-    return "\n".join((l for l in lines_without_comments if l.strip()))
+    return full_text
 
 
 if __name__ == "__main__":
