@@ -4,6 +4,26 @@ DEFINE_TEXT = "#define "
 SINGLE_LINE_COMMENT_TEXT = "//"
 
 
+def _extract_mappings(raw_text_str: str) -> tuple[list[str], dict[str, str]]:
+    mappings = {}
+    text_lines = []
+
+    # pass one: load in mappings
+    for line in raw_text_str.splitlines():
+        if line.startswith(DEFINE_TEXT):
+            # convert from '#define  key value' -> 'key value'
+            stripline = line.removeprefix(DEFINE_TEXT).strip()
+            sep_idx = stripline.find(" ")
+
+            # mappings[key] = value
+            if sep_idx != -1:
+                mappings[stripline[:sep_idx]] = stripline[sep_idx:].strip()
+        else:
+            text_lines.append(line)
+
+    return mappings, text_lines
+
+
 def _process_macros(raw_text_lines: list[str], macro_map: dict[str, str]):
     processed_lines = []
 
@@ -25,22 +45,8 @@ def _process_macros(raw_text_lines: list[str], macro_map: dict[str, str]):
 
 
 def preprocess(raw_text: str, debug=False):
-    # use an ordered list of tuples instead of a dict to allow for sequentially applying mappings
-    mappings: dict[str, str] = {}
-    lines_without_defines: list[str] = []
-
-    # pass one: load in mappings
-    for line in raw_text.splitlines():
-        if line.startswith(DEFINE_TEXT):
-            # convert from '#define  key value' -> 'key value'
-            stripline = line.removeprefix(DEFINE_TEXT).strip()
-            sep_idx = stripline.find(" ")
-
-            # mappings[key] = value
-            if sep_idx != -1:
-                mappings[stripline[:sep_idx]] = stripline[sep_idx:].strip()
-        else:
-            lines_without_defines.append(line)
+    # pass one: extract macros
+    mappings, lines_without_defines = _extract_mappings(raw_text)
 
     if debug:
         print(f'mappings: {mappings}')
