@@ -7,22 +7,51 @@ MULTI_LINE_COMMENT_END = "*/"
 
 
 def _remove_comments(text: str) -> str:
-    lines_without_comments: list[str] = []
+    lines_without_multiline_comments: list[str] = []
+    in_multiline_comment = False
+
+    # strip out multiline comments
     for line in text.splitlines():
+        # handles the case of multiple multiline comments in a single line
+        line_frags = []
+
+        if not in_multiline_comment:
+            cut_start_idx = line.find(MULTI_LINE_COMMENT_BEGIN)
+            if cut_start_idx != -1:
+                in_multiline_comment = True
+                line_frags.append(line[:cut_start_idx])
+            else:
+                line_frags.append(line)
+        else:
+            cut_end_idx = line.find(MULTI_LINE_COMMENT_END)
+            if cut_end_idx == -1:
+                continue
+            else:
+                line = line[cut_end_idx + len(MULTI_LINE_COMMENT_END):]
+                in_multiline_comment = False
+
+        lines_without_multiline_comments.append("".join(line_frags))
+
+    lines_without_comments: list[str] = []
+
+    # strip out single line comments
+    for line in lines_without_multiline_comments:
         comment_idx = line.find(SINGLE_LINE_COMMENT_TEXT)
         if comment_idx == -1:
             lines_without_comments.append(line)
         else:
             lines_without_comments.append(line[:comment_idx])
 
-    return "\n".join((l for l in lines_without_comments if l.strip()))
+    text_without_comments = "\n".join(
+        (l for l in lines_without_comments if l.strip()))
+
+    return text_without_comments
 
 
 def _extract_mappings(raw_text_str: str) -> tuple[list[str], dict[str, str]]:
     mappings = {}
     text_lines = []
 
-    # pass one: load in mappings
     for line in raw_text_str.splitlines():
         if line.startswith(DEFINE_TEXT):
             # convert from '#define  key value' -> 'key value'
@@ -51,6 +80,7 @@ def _process_macros(raw_text_lines: list[str], macro_map: dict[str, str]):
             for key, value in macro_map.items():
                 if processed_line.find(key) != -1:
                     processed_line = processed_line.replace(key, value)
+                    loop_check.add(key)
 
         # once fully processed, add the line to the list
         processed_lines.append(processed_line)
@@ -59,7 +89,7 @@ def _process_macros(raw_text_lines: list[str], macro_map: dict[str, str]):
 
 
 def preprocess(raw_text: str, debug=False):
-    # pass one: extract macros
+    # pass one: extract macro mappings
     mappings, lines_without_defines = _extract_mappings(raw_text)
 
     if debug:
