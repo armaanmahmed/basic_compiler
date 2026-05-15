@@ -5,6 +5,7 @@ DEFINE_TEXT = "#define "
 SINGLE_LINE_COMMENT_TEXT = "//"
 MULTI_LINE_COMMENT_BEGIN = "/*"
 MULTI_LINE_COMMENT_END = "*/"
+TARGET_DIR = "target_files/"
 
 # some exception classes for organization
 
@@ -111,26 +112,26 @@ def _process_macros(raw_text_lines: list[str], macro_map: dict[str, str]):
 
 
 def preprocess(raw_text: str, debug=False):
-    # pass one: extract macro mappings
-    mappings, lines_without_defines = _extract_mappings(raw_text)
+
+    lines_without_comments = _remove_comments(raw_text)
+
+    # pass two: extract macro mappings
+    mappings, lines_without_defines = _extract_mappings(lines_without_comments)
 
     if debug:
         print(f'mappings: {mappings}')
         print(f'lines without defines: {lines_without_defines}')
 
-    # pass two: process macros
+    # pass three: process macros
     substituted_text_lines = _process_macros(lines_without_defines, mappings)
-    processed_text = "\n".join(substituted_text_lines)
-
-    # pass three: remove comments
-    full_text = _remove_comments(processed_text)
+    full_text = "\n".join(substituted_text_lines)
 
     return full_text
 
 
 if __name__ == "__main__":
     if len(argv) < 2:
-        filename = input("Enter a file: ")
+        filename = TARGET_DIR + input("Enter a file: ")
     else:
         filename = argv[1]
 
