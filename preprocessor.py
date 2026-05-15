@@ -1,9 +1,16 @@
 from sys import argv
 
+# macros for the preprocessor
 DEFINE_TEXT = "#define "
 SINGLE_LINE_COMMENT_TEXT = "//"
 MULTI_LINE_COMMENT_BEGIN = "/*"
 MULTI_LINE_COMMENT_END = "*/"
+
+# some exception classes for organization
+
+
+class CommentParseException(Exception):
+    pass
 
 
 def _remove_comments(text: str) -> str:
@@ -14,23 +21,38 @@ def _remove_comments(text: str) -> str:
     for line in text.splitlines():
         # handles the case of multiple multiline comments in a single line
         line_frags = []
+        left_to_parse = line
 
-        if not in_multiline_comment:
-            cut_start_idx = line.find(MULTI_LINE_COMMENT_BEGIN)
-            if cut_start_idx != -1:
-                in_multiline_comment = True
-                line_frags.append(line[:cut_start_idx])
+        # iterate through and case on whether in multiline comment
+        # and the presence of the next comment start/end symbol
+        while left_to_parse:
+            if not in_multiline_comment:
+                cut_start_idx = left_to_parse.find(MULTI_LINE_COMMENT_BEGIN)
+
+                # if no multiline comment marker found, simply append and advance
+                if cut_start_idx == -1:
+                    line_frags.append(left_to_parse)
+                    break
+                else:
+                    # if found, append everything until then and cut the marker too
+                    in_multiline_comment = True
+                    line_frags.append(left_to_parse[:cut_start_idx])
+                    left_to_parse = left_to_parse[cut_start_idx +
+                                                  len(MULTI_LINE_COMMENT_BEGIN):]
             else:
-                line_frags.append(line)
-        else:
-            cut_end_idx = line.find(MULTI_LINE_COMMENT_END)
-            if cut_end_idx == -1:
-                continue
-            else:
-                line = line[cut_end_idx + len(MULTI_LINE_COMMENT_END):]
-                in_multiline_comment = False
+                cut_end_idx = left_to_parse.find(MULTI_LINE_COMMENT_END)
+                # if not found, then everything else is comment so can be discarded
+                if cut_end_idx == -1:
+                    break
+                else:
+                    left_to_parse = left_to_parse[cut_end_idx +
+                                                  len(MULTI_LINE_COMMENT_END):]
+                    in_multiline_comment = False
 
         lines_without_multiline_comments.append("".join(line_frags))
+
+    if in_multiline_comment:
+        raise CommentParseException("Unpaired multiline comment syntax")
 
     lines_without_comments: list[str] = []
 

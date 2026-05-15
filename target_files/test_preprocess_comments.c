@@ -5,7 +5,7 @@ int main() {
 
     int x = 2; // partially commented out line
 
-    char c = /* some comment here */ 'c'; /* another in the same line!*/
+    char c = /* some comment here */'c'; /* another in the same line!*/
     /**
       and of course
       we have our standard multiline comment
