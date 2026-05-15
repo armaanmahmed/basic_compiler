@@ -14,119 +14,122 @@ class CommentParseException(Exception):
     pass
 
 
-def _remove_comments(text: str) -> str:
-    lines_without_multiline_comments: list[str] = []
-    in_multiline_comment = False
+class Preprocessor:
+    def __init__(self, src: str):
+        self.src = src
 
-    # strip out multiline comments
-    for line in text.splitlines():
-        # handles the case of multiple multiline comments in a single line
-        line_frags = []
-        left_to_parse = line
+    def _remove_comments(self, text: str) -> str:
+        lines_without_multiline_comments: list[str] = []
+        in_multiline_comment = False
 
-        # iterate through and case on whether in multiline comment
-        # and the presence of the next comment start/end symbol
-        while left_to_parse:
-            if not in_multiline_comment:
-                cut_start_idx = left_to_parse.find(MULTI_LINE_COMMENT_BEGIN)
+        # strip out multiline comments
+        for line in text.splitlines():
+            # handles the case of multiple multiline comments in a single line
+            line_frags = []
+            left_to_parse = line
 
-                # if no multiline comment marker found, simply append and advance
-                if cut_start_idx == -1:
-                    line_frags.append(left_to_parse)
-                    break
+            # iterate through and case on whether in multiline comment
+            # and the presence of the next comment start/end symbol
+            while left_to_parse:
+                if not in_multiline_comment:
+                    cut_start_idx = left_to_parse.find(
+                        MULTI_LINE_COMMENT_BEGIN)
+
+                    # if no multiline comment marker found, simply append and advance
+                    if cut_start_idx == -1:
+                        line_frags.append(left_to_parse)
+                        break
+                    else:
+                        # if found, append everything until then and cut the marker too
+                        in_multiline_comment = True
+                        line_frags.append(left_to_parse[:cut_start_idx])
+                        left_to_parse = left_to_parse[cut_start_idx +
+                                                      len(MULTI_LINE_COMMENT_BEGIN):]
                 else:
-                    # if found, append everything until then and cut the marker too
-                    in_multiline_comment = True
-                    line_frags.append(left_to_parse[:cut_start_idx])
-                    left_to_parse = left_to_parse[cut_start_idx +
-                                                  len(MULTI_LINE_COMMENT_BEGIN):]
+                    cut_end_idx = left_to_parse.find(MULTI_LINE_COMMENT_END)
+                    # if not found, then everything else is comment so can be discarded
+                    if cut_end_idx == -1:
+                        break
+                    else:
+                        left_to_parse = left_to_parse[cut_end_idx +
+                                                      len(MULTI_LINE_COMMENT_END):]
+                        in_multiline_comment = False
+
+            lines_without_multiline_comments.append("".join(line_frags))
+
+        if in_multiline_comment:
+            raise CommentParseException("Unpaired multiline comment syntax")
+
+        lines_without_comments: list[str] = []
+
+        # strip out single line comments
+        for line in lines_without_multiline_comments:
+            comment_idx = line.find(SINGLE_LINE_COMMENT_TEXT)
+            if comment_idx == -1:
+                lines_without_comments.append(line)
             else:
-                cut_end_idx = left_to_parse.find(MULTI_LINE_COMMENT_END)
-                # if not found, then everything else is comment so can be discarded
-                if cut_end_idx == -1:
-                    break
-                else:
-                    left_to_parse = left_to_parse[cut_end_idx +
-                                                  len(MULTI_LINE_COMMENT_END):]
-                    in_multiline_comment = False
+                lines_without_comments.append(line[:comment_idx])
 
-        lines_without_multiline_comments.append("".join(line_frags))
+        text_without_comments = "\n".join(
+            (l for l in lines_without_comments if l.strip()))
 
-    if in_multiline_comment:
-        raise CommentParseException("Unpaired multiline comment syntax")
+        return text_without_comments
 
-    lines_without_comments: list[str] = []
+    def _extract_mappings(self, raw_text_str: str) -> tuple[list[str], dict[str, str]]:
+        mappings = {}
+        text_lines = []
 
-    # strip out single line comments
-    for line in lines_without_multiline_comments:
-        comment_idx = line.find(SINGLE_LINE_COMMENT_TEXT)
-        if comment_idx == -1:
-            lines_without_comments.append(line)
-        else:
-            lines_without_comments.append(line[:comment_idx])
+        for line in raw_text_str.splitlines():
+            if line.startswith(DEFINE_TEXT):
+                # convert from '#define  key value' -> 'key value'
+                stripline = line.removeprefix(DEFINE_TEXT).strip()
+                sep_idx = stripline.find(" ")
 
-    text_without_comments = "\n".join(
-        (l for l in lines_without_comments if l.strip()))
+                # mappings[key] = value
+                if sep_idx != -1:
+                    mappings[stripline[:sep_idx]] = stripline[sep_idx:].strip()
+            else:
+                text_lines.append(line)
 
-    return text_without_comments
+        return mappings, text_lines
 
+    def _process_macros(self, raw_text_lines: list[str], macro_map: dict[str, str]):
+        processed_lines = []
 
-def _extract_mappings(raw_text_str: str) -> tuple[list[str], dict[str, str]]:
-    mappings = {}
-    text_lines = []
+        for line in raw_text_lines:
+            # prevent infinite substitutions - may update based on actual preprocessor behavior
+            loop_check = set()
+            processed_line = line
 
-    for line in raw_text_str.splitlines():
-        if line.startswith(DEFINE_TEXT):
-            # convert from '#define  key value' -> 'key value'
-            stripline = line.removeprefix(DEFINE_TEXT).strip()
-            sep_idx = stripline.find(" ")
+            # while this line contains any macros not in the already-replaced set
+            while any(processed_line.find(key) != -1 for key in macro_map if key not in loop_check):
+                for key, value in macro_map.items():
+                    if processed_line.find(key) != -1:
+                        processed_line = processed_line.replace(key, value)
+                        loop_check.add(key)
 
-            # mappings[key] = value
-            if sep_idx != -1:
-                mappings[stripline[:sep_idx]] = stripline[sep_idx:].strip()
-        else:
-            text_lines.append(line)
+            # once fully processed, add the line to the list
+            processed_lines.append(processed_line)
 
-    return mappings, text_lines
+        return processed_lines
 
+    def preprocess(self, debug=False):
+        lines_without_comments = self._remove_comments(self.src)
 
-def _process_macros(raw_text_lines: list[str], macro_map: dict[str, str]):
-    processed_lines = []
+        # pass two: extract macro mappings
+        mappings, lines_without_defines = self._extract_mappings(
+            lines_without_comments)
 
-    for line in raw_text_lines:
-        # prevent infinite substitutions - may update based on actual preprocessor behavior
-        loop_check = set()
-        processed_line = line
+        if debug:
+            print(f'mappings: {mappings}')
+            print(f'lines without defines: {lines_without_defines}')
 
-        # while this line contains any macros not in the already-replaced set
-        while any(processed_line.find(key) != -1 for key in macro_map if key not in loop_check):
-            for key, value in macro_map.items():
-                if processed_line.find(key) != -1:
-                    processed_line = processed_line.replace(key, value)
-                    loop_check.add(key)
+        # pass three: process macros
+        substituted_text_lines = self._process_macros(
+            lines_without_defines, mappings)
+        full_text = "\n".join(substituted_text_lines)
 
-        # once fully processed, add the line to the list
-        processed_lines.append(processed_line)
-
-    return processed_lines
-
-
-def preprocess(raw_text: str, debug=False):
-
-    lines_without_comments = _remove_comments(raw_text)
-
-    # pass two: extract macro mappings
-    mappings, lines_without_defines = _extract_mappings(lines_without_comments)
-
-    if debug:
-        print(f'mappings: {mappings}')
-        print(f'lines without defines: {lines_without_defines}')
-
-    # pass three: process macros
-    substituted_text_lines = _process_macros(lines_without_defines, mappings)
-    full_text = "\n".join(substituted_text_lines)
-
-    return full_text
+        return full_text
 
 
 if __name__ == "__main__":
@@ -136,5 +139,6 @@ if __name__ == "__main__":
         filename = argv[1]
 
     with open(filename, 'r') as file:
-        preprocessed_text = preprocess(file.read())
+        preprocessor = Preprocessor(file.read())
+        preprocessed_text = preprocessor.preprocess()
         print(preprocessed_text)
