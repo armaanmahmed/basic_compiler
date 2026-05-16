@@ -8,7 +8,7 @@ SINGLE_LINE_COMMENT_TEXT = "//"
 MULTI_LINE_COMMENT_BEGIN = "/*"
 MULTI_LINE_COMMENT_END = "*/"
 TARGET_DIR = "target_files/"
-FUNCTION_MACRO_REGEX = r'(\w+)(\((.*?)\))?\s+(.*)'
+MACRO_FN_DEF_REGEX = r'(\w+)(\((.*?)\))?\s+(.*)'
 # regex matches macro name (1), then optional parens and args (2, 3),
 # and then optional whitespace and the body (4)
 
@@ -22,6 +22,10 @@ class Macro:
 
 
 class CommentParseException(Exception):
+    pass
+
+
+class MacroParseException(Exception):
     pass
 
 
@@ -95,18 +99,14 @@ class Preprocessor:
             if line.startswith(DEFINE_TEXT):
                 # convert from '#define  key value' -> 'key value'
                 stripline = line.removeprefix(DEFINE_TEXT).strip()
-                sep_idx = stripline.find(" ")
 
-                # mappings[key] = value
-                if sep_idx != -1:
-                    match = re.search(FUNCTION_MACRO_REGEX, stripline)
-                    key, fmatch, args, body = match.groups()
-                    if fmatch is not None:
-                        macro = Macro(body, args.split(","))
-                    else:
-                        macro = Macro(body)
-
-                    mappings[key] = macro
+                match = re.search(MACRO_FN_DEF_REGEX, stripline)
+                key, fmatch, args, body = match.groups()
+                if fmatch is not None:
+                    macro = Macro(body, args.split(","))
+                else:
+                    macro = Macro(body)
+                mappings[key] = macro
             else:
                 text_lines.append(line)
 
@@ -116,38 +116,52 @@ class Preprocessor:
         processed_lines = []
 
         for line in raw_text_lines:
-            # prevent infinite substitutions - may update based on actual preprocessor behavior
+            # prevent infinite substitutions
             loop_check = set()
             processed_line = line
 
             # while this line contains any macros not in the already-replaced set
             while any(key in processed_line for key in macro_map if key not in loop_check):
                 for key, macro in macro_map.items():
-                    # object macro
-                    if macro.args is None:
-                        if key in processed_line:
+                    if key in processed_line:
+                        # divide into function and object cases based on macro.args
+                        if macro.args is None:
                             processed_line = processed_line.replace(
                                 key, macro.body)
-                            loop_check.add(key)
-                    # TODO: function macro case
-                    else:
-                        pass
+                        else:
+                            for match in re.finditer(rf'{key}\((.*?)\)', processed_line):
+                                call_args = match.group(1).split(",")
+                                if len(call_args) != len(macro.args):
+                                    raise MacroParseException(
+                                        (f"Number of arguments for {key} do not match: "
+                                         f"args were {call_args} at call site and "
+                                         f"{macro.args} at definition site")
+                                    )
+                                body_with_args = macro.body
+
+                                # substitute argument by argument
+                                for macro_arg, call_arg in zip(macro.args, call_args):
+                                    body_with_args = body_with_args.replace(
+                                        macro_arg, call_arg)
+
+                                processed_line = processed_line.replace(
+                                    match.group(0), body_with_args
+                                )
+
+                        loop_check.add(key)
 
             # once fully processed, add the line to the list
             processed_lines.append(processed_line)
 
         return processed_lines
 
-    def preprocess(self, debug=False):
+    def preprocess(self):
+        # pass one: remove comments
         lines_without_comments = self._remove_comments(self.src)
 
         # pass two: extract macro mappings
         mappings, lines_without_defines = self._extract_mappings(
             lines_without_comments)
-
-        if debug:
-            print(f'mappings: {mappings}')
-            print(f'lines without defines: {lines_without_defines}')
 
         # pass three: process macros
         substituted_text_lines = self._process_macros(
