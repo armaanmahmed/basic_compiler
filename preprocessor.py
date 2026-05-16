@@ -1,4 +1,6 @@
+from dataclasses import dataclass
 from sys import argv
+import re
 
 # macros for the preprocessor
 DEFINE_TEXT = "#define "
@@ -6,8 +8,17 @@ SINGLE_LINE_COMMENT_TEXT = "//"
 MULTI_LINE_COMMENT_BEGIN = "/*"
 MULTI_LINE_COMMENT_END = "*/"
 TARGET_DIR = "target_files/"
+FUNCTION_MACRO_REGEX = r'(\w+)(\((.*?)\))?\s+(.*)'
+# regex matches macro name (1), then optional parens and args (2, 3),
+# and then optional whitespace and the body (4)
 
-# some exception classes for organization
+# some classes for organization
+
+
+@dataclass
+class Macro:
+    body: str
+    args: list[str] | None = None
 
 
 class CommentParseException(Exception):
@@ -71,13 +82,14 @@ class Preprocessor:
                 lines_without_comments.append(line[:comment_idx])
 
         text_without_comments = "\n".join(
-            (l for l in lines_without_comments if l.strip()))
+            (l for l in lines_without_comments if l.strip())
+        )
 
         return text_without_comments
 
-    def _extract_mappings(self, raw_text_str: str) -> tuple[list[str], dict[str, str]]:
-        mappings = {}
-        text_lines = []
+    def _extract_mappings(self, raw_text_str: str) -> tuple[list[str], dict[str, Macro]]:
+        mappings: dict[str, Macro] = {}
+        text_lines: list[str] = []
 
         for line in raw_text_str.splitlines():
             if line.startswith(DEFINE_TEXT):
@@ -87,13 +99,20 @@ class Preprocessor:
 
                 # mappings[key] = value
                 if sep_idx != -1:
-                    mappings[stripline[:sep_idx]] = stripline[sep_idx:].strip()
+                    match = re.search(FUNCTION_MACRO_REGEX, stripline)
+                    key, fmatch, args, body = match.groups()
+                    if fmatch is not None:
+                        macro = Macro(body, args.split(","))
+                    else:
+                        macro = Macro(body)
+
+                    mappings[key] = macro
             else:
                 text_lines.append(line)
 
         return mappings, text_lines
 
-    def _process_macros(self, raw_text_lines: list[str], macro_map: dict[str, str]):
+    def _process_macros(self, raw_text_lines: list[str], macro_map: dict[str, Macro]):
         processed_lines = []
 
         for line in raw_text_lines:
@@ -102,11 +121,17 @@ class Preprocessor:
             processed_line = line
 
             # while this line contains any macros not in the already-replaced set
-            while any(processed_line.find(key) != -1 for key in macro_map if key not in loop_check):
-                for key, value in macro_map.items():
-                    if processed_line.find(key) != -1:
-                        processed_line = processed_line.replace(key, value)
-                        loop_check.add(key)
+            while any(key in processed_line for key in macro_map if key not in loop_check):
+                for key, macro in macro_map.items():
+                    # object macro
+                    if macro.args is None:
+                        if key in processed_line:
+                            processed_line = processed_line.replace(
+                                key, macro.body)
+                            loop_check.add(key)
+                    # TODO: function macro case
+                    else:
+                        pass
 
             # once fully processed, add the line to the list
             processed_lines.append(processed_line)
