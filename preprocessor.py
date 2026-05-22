@@ -91,7 +91,7 @@ class Preprocessor:
 
         return text_without_comments
 
-    def _extract_mappings(self, raw_text_str: str) -> tuple[list[str], dict[str, Macro]]:
+    def _extract_mappings(self, raw_text_str: str) -> list[str]:
         mappings: dict[str, Macro] = {}
         text_lines: list[str] = []
 
@@ -110,62 +110,56 @@ class Preprocessor:
             else:
                 text_lines.append(line)
 
-        return mappings, text_lines
+        self.macro_map = mappings
+        return text_lines
 
-    def _process_macros(self, raw_text_lines: list[str], macro_map: dict[str, Macro]):
-        processed_lines = []
+    # prevent infinite substitutions
+    def _eval_line(self, line: str, expanded_macros: set[str] = set()):
+        processed_line = line
 
-        for line in raw_text_lines:
-            # prevent infinite substitutions
-            loop_check = set()
-            processed_line = line
+        # while this line contains any macros not in the already-replaced set
+        for key, macro in self.macro_map.items():
+            if key in processed_line and key not in expanded_macros:
+                # divide into function and object cases based on macro.args
+                if macro.args is None:
+                    expanded_body = self._eval_line(
+                        macro.body, expanded_macros.union({key}))
+                    processed_line = processed_line.replace(
+                        key, expanded_body)
+                else:
+                    for match in re.finditer(rf'{key}\((.*?)\)', processed_line):
+                        call_args = match.group(1).split(",")
+                        if len(call_args) != len(macro.args):
+                            raise MacroParseException(
+                                (f"Number of arguments for {key} do not match: "
+                                    f"args were {call_args} at call site and "
+                                    f"{macro.args} at definition site")
+                            )
+                        body_with_args = macro.body
 
-            # while this line contains any macros not in the already-replaced set
-            while any(key in processed_line for key in macro_map if key not in loop_check):
-                for key, macro in macro_map.items():
-                    if key in processed_line:
-                        # divide into function and object cases based on macro.args
-                        if macro.args is None:
-                            processed_line = processed_line.replace(
-                                key, macro.body)
-                        else:
-                            for match in re.finditer(rf'{key}\((.*?)\)', processed_line):
-                                call_args = match.group(1).split(",")
-                                if len(call_args) != len(macro.args):
-                                    raise MacroParseException(
-                                        (f"Number of arguments for {key} do not match: "
-                                         f"args were {call_args} at call site and "
-                                         f"{macro.args} at definition site")
-                                    )
-                                body_with_args = macro.body
+                        # substitute argument by argument
+                        for macro_arg, call_arg in zip(macro.args, call_args):
+                            body_with_args = body_with_args.replace(
+                                macro_arg, call_arg)
 
-                                # substitute argument by argument
-                                for macro_arg, call_arg in zip(macro.args, call_args):
-                                    body_with_args = body_with_args.replace(
-                                        macro_arg, call_arg)
+                        processed_line = processed_line.replace(
+                            match.group(0), body_with_args
+                        )
 
-                                processed_line = processed_line.replace(
-                                    match.group(0), body_with_args
-                                )
+        return processed_line
 
-                        loop_check.add(key)
-
-            # once fully processed, add the line to the list
-            processed_lines.append(processed_line)
-
-        return processed_lines
+    def _process_macros(self, raw_text_lines: list[str]):
+        return [self._eval_line(line) for line in raw_text_lines]
 
     def preprocess(self):
         # pass one: remove comments
         lines_without_comments = self._remove_comments(self.src)
 
         # pass two: extract macro mappings
-        mappings, lines_without_defines = self._extract_mappings(
-            lines_without_comments)
+        lines_without_defines = self._extract_mappings(lines_without_comments)
 
         # pass three: process macros
-        substituted_text_lines = self._process_macros(
-            lines_without_defines, mappings)
+        substituted_text_lines = self._process_macros(lines_without_defines)
         full_text = "\n".join(substituted_text_lines)
 
         return full_text
