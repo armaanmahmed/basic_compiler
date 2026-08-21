@@ -103,7 +103,8 @@ class Preprocessor:
                 match = re.search(MACRO_FN_DEF_REGEX, stripline)
                 key, fmatch, args, body = match.groups()
                 if fmatch is not None:
-                    macro = Macro(body, args.split(","))
+                    macro = Macro(body, [arg.strip()
+                                         for arg in args.split(",")])
                 else:
                     macro = Macro(body)
                 mappings[key] = macro
@@ -113,38 +114,93 @@ class Preprocessor:
         self.macro_map = mappings
         return text_lines
 
+    def _find_macro_call(self, line: str, key: str,
+                         start: int = 0) -> tuple[int, int, list[str]] | None:
+        # track parentheses depth for nested function calls
+        call_start = line.find(key + "(", start)
+        if call_start == -1:
+            return None
+
+        depth = 0
+        args: list[str] = []
+        current_arg: list[str] = []
+
+        for i in range(call_start + len(key), len(line)):
+            char = line[i]
+            if char == '(':
+                depth += 1
+
+                # this is the top-level call, ( is not part of an arg
+                if depth == 1:
+                    continue
+            elif char == ')':
+                depth -= 1
+                if depth == 0:
+                    args.append("".join(current_arg).strip())
+                    return call_start, i + 1, args
+                    
+            # commas separate arguments at the top level
+            elif char == ',' and depth == 1:
+                args.append("".join(current_arg).strip())
+                current_arg = []
+                continue
+            
+            current_arg.append(char)
+        
+        if depth != 0:
+            raise MacroParseException(
+                f"Unbalanced parentheses in call to {key}")
+
     # prevent infinite substitutions
     def _eval_line(self, line: str, expanded_macros: set[str] = set()):
         processed_line = line
 
-        # while this line contains any macros not in the already-replaced set
+        # substitute any macros not in the already-replaced set
         for key, macro in self.macro_map.items():
-            if key in processed_line and key not in expanded_macros:
-                # divide into function and object cases based on macro.args
-                if macro.args is None:
+            if key in expanded_macros:
+                continue
+
+            # divide into function and object cases based on macro.args
+            if macro.args is None:
+                # object case
+                if key in processed_line:
                     expanded_body = self._eval_line(
                         macro.body, expanded_macros.union({key}))
                     processed_line = processed_line.replace(
                         key, expanded_body)
-                else:
-                    for match in re.finditer(rf'{key}\((.*?)\)', processed_line):
-                        call_args = match.group(1).split(",")
-                        if len(call_args) != len(macro.args):
-                            raise MacroParseException(
-                                (f"Number of arguments for {key} do not match: "
-                                    f"args were {call_args} at call site and "
-                                    f"{macro.args} at definition site")
-                            )
-                        body_with_args = macro.body
-
-                        # substitute argument by argument
-                        for macro_arg, call_arg in zip(macro.args, call_args):
-                            body_with_args = body_with_args.replace(
-                                macro_arg, call_arg)
-
-                        processed_line = processed_line.replace(
-                            match.group(0), body_with_args
+            else:
+                # function case
+                search_from = 0
+                while (call := self._find_macro_call(
+                        processed_line, key, search_from)) is not None:
+                    call_start, call_end, call_args = call
+                    if len(call_args) != len(macro.args):
+                        raise MacroParseException(
+                            (f"Number of arguments for {key} do not match: "
+                                f"args were {call_args} at call site and "
+                                f"{macro.args} at definition site")
                         )
+
+                    # expand the args first
+                    expanded_args = [self._eval_line(arg, expanded_macros)
+                                     for arg in call_args]
+
+                    # substitute argument by argument, on whole words only
+                    # so an arg named x doesn't overwrite names containing x
+                    body_with_args = macro.body
+                    for macro_arg, call_arg in zip(macro.args, expanded_args):
+                        body_with_args = re.sub(
+                            rf'\b{macro_arg}\b', call_arg, body_with_args)
+
+                    # the substituted body may not use itself
+                    # add the macro to expanded_macros
+                    expanded_body = self._eval_line(
+                        body_with_args, expanded_macros.union({key}))
+
+                    processed_line = (processed_line[:call_start]
+                                      + expanded_body
+                                      + processed_line[call_end:])
+                    search_from = call_start + len(expanded_body)
 
         return processed_line
 
