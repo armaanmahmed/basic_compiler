@@ -1,6 +1,6 @@
+import re
 from dataclasses import dataclass
 from sys import argv
-import re
 
 # macros for the preprocessor
 DEFINE_TEXT = "#define "
@@ -8,7 +8,7 @@ SINGLE_LINE_COMMENT_TEXT = "//"
 MULTI_LINE_COMMENT_BEGIN = "/*"
 MULTI_LINE_COMMENT_END = "*/"
 TARGET_DIR = "target_files/"
-MACRO_FN_DEF_REGEX = r'(\w+)(\((.*?)\))?\s+(.*)'
+MACRO_FN_DEF_REGEX = r"(\w+)(\((.*?)\))?\s+(.*)"
 # regex matches macro name (1), then optional parens and args (2, 3),
 # and then optional whitespace and the body (4)
 
@@ -47,8 +47,7 @@ class Preprocessor:
             # and the presence of the next comment start/end symbol
             while left_to_parse:
                 if not in_multiline_comment:
-                    cut_start_idx = left_to_parse.find(
-                        MULTI_LINE_COMMENT_BEGIN)
+                    cut_start_idx = left_to_parse.find(MULTI_LINE_COMMENT_BEGIN)
 
                     # if no multiline comment marker found, simply append and advance
                     if cut_start_idx == -1:
@@ -58,16 +57,18 @@ class Preprocessor:
                         # if found, append everything until then and cut the marker too
                         in_multiline_comment = True
                         line_frags.append(left_to_parse[:cut_start_idx])
-                        left_to_parse = left_to_parse[cut_start_idx +
-                                                      len(MULTI_LINE_COMMENT_BEGIN):]
+                        left_to_parse = left_to_parse[
+                            cut_start_idx + len(MULTI_LINE_COMMENT_BEGIN) :
+                        ]
                 else:
                     cut_end_idx = left_to_parse.find(MULTI_LINE_COMMENT_END)
                     # if not found, then everything else is comment so can be discarded
                     if cut_end_idx == -1:
                         break
                     else:
-                        left_to_parse = left_to_parse[cut_end_idx +
-                                                      len(MULTI_LINE_COMMENT_END):]
+                        left_to_parse = left_to_parse[
+                            cut_end_idx + len(MULTI_LINE_COMMENT_END) :
+                        ]
                         in_multiline_comment = False
 
             lines_without_multiline_comments.append("".join(line_frags))
@@ -86,7 +87,7 @@ class Preprocessor:
                 lines_without_comments.append(line[:comment_idx])
 
         text_without_comments = "\n".join(
-            (l for l in lines_without_comments if l.strip())
+            l for l in lines_without_comments if l.strip()
         )
 
         return text_without_comments
@@ -101,10 +102,11 @@ class Preprocessor:
                 stripline = line.removeprefix(DEFINE_TEXT).strip()
 
                 match = re.search(MACRO_FN_DEF_REGEX, stripline)
+                if match is None:
+                    raise MacroParseException(f"Malformed macro definition: {line}")
                 key, fmatch, args, body = match.groups()
                 if fmatch is not None:
-                    macro = Macro(body, [arg.strip()
-                                         for arg in args.split(",")])
+                    macro = Macro(body, [arg.strip() for arg in args.split(",")])
                 else:
                     macro = Macro(body)
                 mappings[key] = macro
@@ -114,8 +116,9 @@ class Preprocessor:
         self.macro_map = mappings
         return text_lines
 
-    def _find_macro_call(self, line: str, key: str,
-                         start: int = 0) -> tuple[int, int, list[str]] | None:
+    def _find_macro_call(
+        self, line: str, key: str, start: int = 0
+    ) -> tuple[int, int, list[str]] | None:
         # track parentheses depth for nested function calls
         call_start = line.find(key + "(", start)
         if call_start == -1:
@@ -127,32 +130,33 @@ class Preprocessor:
 
         for i in range(call_start + len(key), len(line)):
             char = line[i]
-            if char == '(':
+            if char == "(":
                 depth += 1
 
                 # this is the top-level call, ( is not part of an arg
                 if depth == 1:
                     continue
-            elif char == ')':
+            elif char == ")":
                 depth -= 1
                 if depth == 0:
                     args.append("".join(current_arg).strip())
                     return call_start, i + 1, args
-                    
+
             # commas separate arguments at the top level
-            elif char == ',' and depth == 1:
+            elif char == "," and depth == 1:
                 args.append("".join(current_arg).strip())
                 current_arg = []
                 continue
-            
+
             current_arg.append(char)
-        
-        if depth != 0:
-            raise MacroParseException(
-                f"Unbalanced parentheses in call to {key}")
+
+        # loop can only exhaust without returning if parens never rebalanced
+        raise MacroParseException(f"Unbalanced parentheses in call to {key}")
 
     # prevent infinite substitutions
-    def _eval_line(self, line: str, expanded_macros: set[str] = set()):
+    def _eval_line(self, line: str, expanded_macros: set[str] | None = None) -> str:
+        if expanded_macros is None:
+            expanded_macros = set()
         processed_line = line
 
         # substitute any macros not in the already-replaced set
@@ -165,41 +169,47 @@ class Preprocessor:
                 # object case
                 if key in processed_line:
                     expanded_body = self._eval_line(
-                        macro.body, expanded_macros.union({key}))
-                    processed_line = processed_line.replace(
-                        key, expanded_body)
+                        macro.body, expanded_macros.union({key})
+                    )
+                    processed_line = processed_line.replace(key, expanded_body)
             else:
                 # function case
                 search_from = 0
-                while (call := self._find_macro_call(
-                        processed_line, key, search_from)) is not None:
+                while (
+                    call := self._find_macro_call(processed_line, key, search_from)
+                ) is not None:
                     call_start, call_end, call_args = call
                     if len(call_args) != len(macro.args):
                         raise MacroParseException(
-                            (f"Number of arguments for {key} do not match: "
-                                f"args were {call_args} at call site and "
-                                f"{macro.args} at definition site")
+                            f"Number of arguments for {key} do not match: "
+                            f"args were {call_args} at call site and "
+                            f"{macro.args} at definition site"
                         )
 
                     # expand the args first
-                    expanded_args = [self._eval_line(arg, expanded_macros)
-                                     for arg in call_args]
+                    expanded_args = [
+                        self._eval_line(arg, expanded_macros) for arg in call_args
+                    ]
 
                     # substitute argument by argument, on whole words only
                     # so an arg named x doesn't overwrite names containing x
                     body_with_args = macro.body
                     for macro_arg, call_arg in zip(macro.args, expanded_args):
                         body_with_args = re.sub(
-                            rf'\b{macro_arg}\b', call_arg, body_with_args)
+                            rf"\b{macro_arg}\b", call_arg, body_with_args
+                        )
 
                     # the substituted body may not use itself
                     # add the macro to expanded_macros
                     expanded_body = self._eval_line(
-                        body_with_args, expanded_macros.union({key}))
+                        body_with_args, expanded_macros.union({key})
+                    )
 
-                    processed_line = (processed_line[:call_start]
-                                      + expanded_body
-                                      + processed_line[call_end:])
+                    processed_line = (
+                        processed_line[:call_start]
+                        + expanded_body
+                        + processed_line[call_end:]
+                    )
                     search_from = call_start + len(expanded_body)
 
         return processed_line
@@ -227,7 +237,7 @@ if __name__ == "__main__":
     else:
         filename = argv[1]
 
-    with open(filename, 'r') as file:
+    with open(filename, "r") as file:
         preprocessor = Preprocessor(file.read())
         preprocessed_text = preprocessor.preprocess()
         print(preprocessed_text)

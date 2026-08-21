@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: ruff lint
+        run: uvx ruff@0.16.4 check .
+      - name: ruff format
+        run: uvx ruff@0.16.4 format --check .
+      - name: mypy
+        run: uvx mypy@2.3.1 preprocessor.py programnode.py
+
+  smoke:
+    strategy:
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: preprocess well-formed samples
+        run: |
+          for f in target_files/test_preprocess_basic.c \
+                   target_files/test_preprocess_comments.c \
+                   target_files/test_preprocess_functions.c; do
+            python preprocessor.py "$f"
+          done
+      - name: malformed sample must be rejected
+        run: |
+          if python preprocessor.py target_files/test_preprocess_unpaired_comment.c; then
+            echo "expected a parse failure but preprocessing succeeded"
+            exit 1
+          fi
